@@ -1,0 +1,67 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user is admin (email bypass for first admin, or Firestore role)
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == 'dustinisaacking@gmail.com' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    // Helper function to check if user has shame role
+    function isShame() {
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'shame';
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      // Allow reading your own document
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // Allow users to create their own document (for new users)
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+
+      // Allow users to update their own data (including answered, votedAt, lastVoteOption)
+      allow update: if isAuthenticated() && request.auth.uid == userId;
+
+      // Admins can read/write any user document
+      allow write: if isAdmin();
+      // Admins and shame can read any user document (for pending voters page)
+      allow read: if isAdmin() || isShame();
+    }
+    
+    // Questions collection
+    match /questions/{questionId} {
+      // Anyone authenticated can read questions
+      allow read: if isAuthenticated();
+
+      // Allow authenticated non-shame users to update answers and lastVoteAt fields (voting)
+      allow update: if isAuthenticated() && !isShame() &&
+                      (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answers', 'lastVoteAt']) ||
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answers']));
+
+      // Only admins can create/delete questions or update other fields
+      allow create, delete, update: if isAdmin();
+    }
+
+    // Timer collection for rotation timer
+    match /timer/{timerId} {
+      // Anyone authenticated can read timer state
+      allow read: if isAuthenticated();
+
+      // Only admins can write to timer
+      allow write: if isAdmin();
+    }
+
+  }
+}
